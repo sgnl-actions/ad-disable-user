@@ -1,7 +1,7 @@
 {
-  "name": "@sgnl-actions/ad-add-to-group",
+  "name": "@sgnl-actions/ad-disable-user",
   "version": "1.0.0",
-  "description": "Add a user to a group in on-premise Active Directory",
+  "description": "Disable an enabled user account in on-premise Active Directory",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

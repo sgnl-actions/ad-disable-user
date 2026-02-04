@@ -20,8 +20,7 @@ const mockContext = {
 };
 
 const mockParams = {
-  userDN: 'CN=John Doe,OU=Users,DC=corp,DC=example,DC=com',
-  groupDN: 'CN=Test Group,OU=Groups,DC=corp,DC=example,DC=com'
+  userDN: 'CN=John Doe,OU=Users,DC=corp,DC=example,DC=com'
 };
 
 async function runDev() {

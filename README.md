@@ -1,16 +1,15 @@
-# Active Directory Add User to Group Action
+# Active Directory Disable User Action
 
-This action adds a user to a group in on-premise Active Directory using LDAP/LDAPS.
+This action disables an enabled user account in on-premise Active Directory using LDAP/LDAPS.
 
 ## Overview
 
-The AD Add User to Group action enables automated group membership management by adding users to Active Directory security groups or distribution groups via LDAP. It handles LDAP bind authentication, TLS configuration, and provides idempotent handling when a user is already a member of the target group.
+The AD Disable User action disables Active Directory accounts by setting the `ACCOUNTDISABLE` bit (0x0002) in the `userAccountControl` attribute. It reads the current UAC value, checks if the account is enabled, and if so sets the disable bit while preserving all other flags. The operation is idempotent -- if the account is already disabled, it returns success without making changes.
 
 ## Prerequisites
 
 - On-premise Active Directory domain controller accessible via LDAP or LDAPS
-- A service account with permissions to modify group membership
-  - Typically requires **Write** permission on the `member` attribute of target groups
+- A service account with permissions to modify the `userAccountControl` attribute on target user objects
 - Network connectivity from the execution environment to the LDAP server
 
 ## Configuration
@@ -35,8 +34,7 @@ This action uses LDAP Simple Bind authentication with a service account.
 
 | Parameter | Type | Required | Description | Example |
 |-----------|------|----------|-------------|---------|
-| `userDN` | string | Yes | Distinguished Name of the user to add | `CN=John Doe,OU=Users,DC=corp,DC=example,DC=com` |
-| `groupDN` | string | Yes | Distinguished Name of the target group | `CN=Admins,OU=Groups,DC=corp,DC=example,DC=com` |
+| `userDN` | string | Yes | Distinguished Name of the user to disable | `CN=John Doe,OU=Users,DC=corp,DC=example,DC=com` |
 | `address` | string | No | Optional LDAP server URL override | `ldaps://ad.corp.example.com:636` |
 
 ### Output Structure
@@ -45,10 +43,10 @@ This action uses LDAP Simple Bind authentication with a service account.
 |-------|------|-------------|
 | `status` | string | Operation result (success, failed, etc.) |
 | `userDN` | string | Distinguished Name of the user that was processed |
-| `groupDN` | string | Distinguished Name of the group that was processed |
-| `added` | boolean | Whether the user was newly added to the group |
+| `disabled` | boolean | Whether the user was newly disabled (false if already disabled) |
+| `previousUAC` | number | The `userAccountControl` value before the operation |
+| `newUAC` | number | The `userAccountControl` value after the operation |
 | `address` | string | The LDAP server URL that was used |
-| `message` | string | Optional message providing additional context (e.g., when user is already a member) |
 
 ## Usage Examples
 
@@ -56,8 +54,7 @@ This action uses LDAP Simple Bind authentication with a service account.
 
 ```json
 {
-  "userDN": "CN=John Doe,OU=Users,DC=corp,DC=example,DC=com",
-  "groupDN": "CN=HR Group,OU=Groups,DC=corp,DC=example,DC=com"
+  "userDN": "CN=John Doe,OU=Users,DC=corp,DC=example,DC=com"
 }
 ```
 
@@ -65,16 +62,15 @@ This action uses LDAP Simple Bind authentication with a service account.
 
 ```json
 {
-  "id": "add-user-to-hr-group",
+  "id": "disable-user-account",
   "type": "nodejs-22",
   "script": {
-    "repository": "github.com/sgnl-actions/ad-add-to-group",
+    "repository": "github.com/sgnl-actions/ad-disable-user",
     "version": "v1.0.0",
     "type": "nodejs"
   },
   "script_inputs": {
-    "userDN": "CN=New Employee,OU=Users,DC=corp,DC=example,DC=com",
-    "groupDN": "CN=HR Group,OU=Groups,DC=corp,DC=example,DC=com"
+    "userDN": "CN=Enabled User,OU=Users,DC=corp,DC=example,DC=com"
   },
   "environment": {
     "ADDRESS": "ldaps://ad.corp.example.com:636"
@@ -92,16 +88,15 @@ For environments with self-signed certificates:
 
 ```json
 {
-  "id": "add-user-to-hr-group",
+  "id": "disable-user-account",
   "type": "nodejs-22",
   "script": {
-    "repository": "github.com/sgnl-actions/ad-add-to-group",
+    "repository": "github.com/sgnl-actions/ad-disable-user",
     "version": "v1.0.0",
     "type": "nodejs"
   },
   "script_inputs": {
-    "userDN": "CN=New Employee,OU=Users,DC=corp,DC=example,DC=com",
-    "groupDN": "CN=HR Group,OU=Groups,DC=corp,DC=example,DC=com"
+    "userDN": "CN=Enabled User,OU=Users,DC=corp,DC=example,DC=com"
   },
   "environment": {
     "ADDRESS": "ldaps://ad.corp.example.com:636",
@@ -116,21 +111,25 @@ For environments with self-signed certificates:
 
 ## API Details
 
-This action uses the LDAP modify operation to add a user DN to the `member` attribute of the target group:
+This action performs two LDAP operations:
+
+1. **SEARCH** the user DN (base scope) to read the current `userAccountControl` value
+2. **MODIFY** the `userAccountControl` attribute with the `ACCOUNTDISABLE` bit set (if it was not already set)
 
 ```
-MODIFY groupDN
-  ADD member: userDN
+SEARCH userDN (scope=base, attrs=userAccountControl)
+MODIFY userDN
+  REPLACE userAccountControl: <value with bit 0x0002 set>
 ```
 
-The connection lifecycle is stateless: each invocation binds to the LDAP server, performs the modify operation, and unbinds in a `finally` block.
+The connection lifecycle is stateless: each invocation binds to the LDAP server, performs the search/modify operations, and unbinds in a `finally` block.
 
 ## Error Handling
 
 ### Success Scenarios
 
-- **Modify succeeds**: User successfully added to group (`added: true`)
-- **LDAP error code 68** (`ENTRY_ALREADY_EXISTS`): User is already a member, treated as success (`added: false`)
+- **User was enabled**: Account disabled successfully (`disabled: true`, UAC updated)
+- **User already disabled**: No changes made (`disabled: false`, UAC unchanged)
 
 ### Retryable Errors
 
@@ -143,9 +142,10 @@ The framework automatically retries on transient errors such as:
 
 The following errors will not be retried:
 - **Invalid credentials**: Incorrect bind DN or password
-- **Insufficient access rights**: Service account lacks permission to modify the group
-- **No such object** (LDAP code 32): The user DN or group DN does not exist
+- **Insufficient access rights**: Service account lacks permission to modify `userAccountControl`
+- **No such object** (LDAP code 32): The user DN does not exist
 - **Invalid DN syntax**: Malformed Distinguished Name
+- **User not found**: Search returned no entries for the given DN
 
 ## Security Considerations
 
@@ -200,32 +200,31 @@ npm run lint
    - Check that the account is not locked or expired in Active Directory
 
 4. **"Insufficient access rights"**
-   - Verify the service account has Write permission on the `member` attribute of the target group
+   - Verify the service account has Write permission on the `userAccountControl` attribute
    - Check if there are any deny ACEs blocking the operation
 
-5. **"No such object" (LDAP code 32)**
+5. **"User not found"**
    - Verify the user DN exists in Active Directory
-   - Verify the group DN exists in Active Directory
-   - Check for typos in the Distinguished Names
+   - Check for typos in the Distinguished Name
 
 6. **TLS/SSL connection errors**
    - Verify the LDAP server is accessible on the configured port
    - For LDAPS, ensure the server certificate is trusted or set `TLS_SKIP_VERIFY=true` for testing
    - Check that the correct port is used (389 for LDAP, 636 for LDAPS)
 
-### Testing Group Membership
+### Verifying Account Status
 
-To verify the action worked correctly, you can check group membership using:
+To verify the action worked correctly, you can check the account status using:
 
 ```bash
 # Using ldapsearch
 ldapsearch -H ldaps://ad.corp.example.com:636 \
   -D "CN=svc-sgnl,OU=Service Accounts,DC=corp,DC=example,DC=com" \
-  -W -b "CN=Target Group,OU=Groups,DC=corp,DC=example,DC=com" \
-  "(objectClass=group)" member
+  -W -b "CN=John Doe,OU=Users,DC=corp,DC=example,DC=com" \
+  "(objectClass=user)" userAccountControl
 
 # Using PowerShell
-Get-ADGroupMember -Identity "Target Group" | Where-Object { $_.Name -eq "John Doe" }
+Get-ADUser -Identity "John Doe" -Properties Enabled, userAccountControl | Select-Object Name, Enabled, userAccountControl
 ```
 
 ## Support

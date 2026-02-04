@@ -1,38 +1,62 @@
 /**
- * Active Directory Add User to Group Action
+ * Active Directory Disable User Action
  *
- * Adds a user to a group in on-premise Active Directory using LDAP/LDAPS.
+ * Disables an enabled user account in on-premise Active Directory by setting
+ * the ACCOUNTDISABLE bit (0x0002) in the userAccountControl attribute.
  */
 
 import { Client } from 'ldapts';
 import { getBaseURL } from '@sgnl-actions/utils';
 
 /**
- * Helper function to add a user to a group in Active Directory
+ * Helper function to disable a user account in Active Directory
  * @param {string} userDN - Distinguished Name of the user
- * @param {string} groupDN - Distinguished Name of the group
  * @param {Client} client - Bound ldapts Client instance
- * @returns {Promise<{success: boolean}>}
+ * @returns {Promise<{disabled: boolean, previousUAC: number, newUAC: number}>}
  */
-async function addUserToGroup(userDN, groupDN, client) {
-  await client.modify(groupDN, [
+async function disableUser(userDN, client) {
+  const { searchEntries } = await client.search(userDN, {
+    scope: 'base',
+    attributes: ['userAccountControl'],
+    filter: '(objectClass=*)'
+  });
+
+  if (!searchEntries || searchEntries.length === 0) {
+    throw new Error(`User not found: ${userDN}`);
+  }
+
+  const rawUAC = searchEntries[0].userAccountControl;
+  const uac = parseInt(rawUAC, 10);
+
+  if (isNaN(uac)) {
+    throw new Error(`Unable to parse userAccountControl value: ${rawUAC}`);
+  }
+
+  // Check if ACCOUNTDISABLE bit (0x0002) is already set
+  if ((uac & 2) !== 0) {
+    return { disabled: false, previousUAC: uac, newUAC: uac };
+  }
+
+  // Set the ACCOUNTDISABLE bit
+  const newUAC = uac | 2;
+
+  await client.modify(userDN, [
     {
-      operation: 'add',
+      operation: 'replace',
       modification: {
-        member: [userDN]
+        userAccountControl: [newUAC.toString()]
       }
     }
   ]);
 
-  return { success: true };
+  return { disabled: true, previousUAC: uac, newUAC };
 }
 
 export default {
   /**
-   * Main execution handler - adds a user to a group in on-premise Active Directory
+   * Main execution handler - disables an enabled user in on-premise Active Directory
    * @param {Object} params - Job input parameters
-   * @param {string} params.userDN - Distinguished Name of the user
-   * @param {string} params.groupDN - Distinguished Name of the group
+   * @param {string} params.userDN - Distinguished Name of the user to disable
    * @param {string} [params.address] - Optional LDAP server URL override
    * @param {Object} context - Execution context with env, secrets, outputs
    * @param {string} context.environment.ADDRESS - Default LDAP server URL
@@ -42,9 +66,9 @@ export default {
    * @returns {Object} Job results
    */
   invoke: async (params, context) => {
-    console.log('Starting Active Directory add user to group operation');
+    console.log('Starting Active Directory disable user operation');
 
-    const { userDN, groupDN } = params;
+    const { userDN } = params;
 
     // Get LDAP server URL using shared utility
     const address = getBaseURL(params, context);
@@ -72,32 +96,25 @@ export default {
       console.log(`Binding to LDAP server at ${address}`);
       await client.bind(bindDN, bindPassword);
 
-      console.log(`Adding user ${userDN} to group ${groupDN}`);
-      await addUserToGroup(userDN, groupDN, client);
+      console.log(`Disabling user ${userDN}`);
+      const { disabled, previousUAC, newUAC } = await disableUser(userDN, client);
 
-      console.log(`Successfully added user ${userDN} to group ${groupDN}`);
+      if (disabled) {
+        console.log(`Successfully disabled user ${userDN} (UAC ${previousUAC} -> ${newUAC})`);
+      } else {
+        console.log(`User ${userDN} is already disabled (UAC ${previousUAC})`);
+      }
+
       return {
         status: 'success',
         userDN,
-        groupDN,
-        added: true,
+        disabled,
+        previousUAC,
+        newUAC,
         address
       };
     } catch (error) {
-      // LDAP error code 68: ENTRY_ALREADY_EXISTS - user is already a member
-      if (error.code === 68) {
-        console.log(`User ${userDN} is already a member of group ${groupDN}`);
-        return {
-          status: 'success',
-          userDN,
-          groupDN,
-          added: false,
-          message: 'User is already a member of the group',
-          address
-        };
-      }
-
-      console.error(`Error adding user to group: ${error.message}`);
+      console.error(`Error disabling user: ${error.message}`);
       throw error;
     } finally {
       await client.unbind();
@@ -110,8 +127,8 @@ export default {
    * @param {Object} _context - Execution context
    */
   error: async (params, _context) => {
-    const { error, userDN, groupDN } = params;
-    console.error(`User group assignment failed for user ${userDN} to group ${groupDN}: ${error.message}`);
+    const { error, userDN } = params;
+    console.error(`Disable user failed for ${userDN}: ${error.message}`);
 
     throw error;
   },
@@ -123,13 +140,12 @@ export default {
    * @returns {Object} Cleanup results
    */
   halt: async (params, _context) => {
-    const { reason, userDN, groupDN } = params;
-    console.log(`Active Directory add user to group operation halted: ${reason}`);
+    const { reason, userDN } = params;
+    console.log(`Active Directory disable user operation halted: ${reason}`);
 
     return {
       status: 'halted',
       userDN: userDN || 'unknown',
-      groupDN: groupDN || 'unknown',
       reason,
       halted_at: new Date().toISOString()
     };
