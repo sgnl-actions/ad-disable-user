@@ -68,7 +68,16 @@ export default {
   invoke: async (params, context) => {
     console.log('Starting Active Directory disable user operation');
 
-    const { userDN } = params;
+    const { userDN, dry_run = false } = params;
+
+    if (dry_run) {
+      console.log('DRY RUN: No changes will be made to Active Directory');
+      return {
+        status: 'dry_run_completed',
+        userDN,
+        disabled: false
+      };
+    }
 
     // Get LDAP server URL using shared utility
     const address = getBaseURL(params, context);
@@ -128,8 +137,41 @@ export default {
    */
   error: async (params, _context) => {
     const { error, userDN } = params;
-    console.error(`Disable user failed for ${userDN}: ${error.message}`);
+    console.error(`Failed to disable AD user ${userDN}: ${error.message}`);
 
+    const errorMessage = error.message.toLowerCase();
+
+    // Authentication errors (fatal - don't retry)
+    if (errorMessage.includes('invalid credentials') ||
+        errorMessage.includes('authentication') ||
+        errorMessage.includes('bind failed')) {
+      console.error('Authentication failed - check BASIC_USERNAME and BASIC_PASSWORD');
+      throw new Error(`LDAP authentication failed: ${error.message}`);
+    }
+
+    // Connection errors (retryable)
+    if (errorMessage.includes('connection') ||
+        errorMessage.includes('timeout') ||
+        errorMessage.includes('econnrefused')) {
+      console.error('Connection error - may be transient, framework will retry');
+      throw error;
+    }
+
+    // User not found (fatal - don't retry)
+    if (errorMessage.includes('not found')) {
+      console.error('User not found - check userDN');
+      throw new Error(`User not found: ${error.message}`);
+    }
+
+    // Insufficient permissions (fatal - don't retry)
+    if (errorMessage.includes('insufficient access') ||
+        errorMessage.includes('permission denied')) {
+      console.error('Insufficient permissions - check service account privileges');
+      throw new Error(`Insufficient LDAP permissions: ${error.message}`);
+    }
+
+    // Unknown error - re-throw for framework retry
+    console.error('Unknown error occurred, allowing framework to retry');
     throw error;
   },
 
