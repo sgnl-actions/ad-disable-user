@@ -12,6 +12,13 @@ jest.unstable_mockModule('ldapts', () => ({
     unbind: mockUnbind,
     modify: mockModify,
     search: mockSearch
+  })),
+  Change: jest.fn().mockImplementation((opts) => ({
+    operation: opts.operation,
+    modification: opts.modification
+  })),
+  Attribute: jest.fn().mockImplementation((opts) => ({
+    [opts.type]: opts.values
   }))
 }));
 
@@ -64,10 +71,12 @@ describe('AD Disable User Script', () => {
       expect(result.newUAC).toBe(514);
       expect(result.address).toBe('ldaps://ad.corp.example.com:636');
 
-      // Verify Client was constructed with correct URL
+      // Verify Client was constructed with correct URL and options
       expect(Client).toHaveBeenCalledWith({
         url: 'ldaps://ad.corp.example.com:636',
-        tlsOptions: {}
+        timeout: 10000,
+        connectTimeout: 10000,
+        tlsOptions: { rejectUnauthorized: true }
       });
 
       // Verify bind was called with correct credentials
@@ -227,16 +236,32 @@ describe('AD Disable User Script', () => {
 
       expect(Client).toHaveBeenCalledWith({
         url: 'ldaps://ad.corp.example.com:636',
+        timeout: 10000,
+        connectTimeout: 10000,
         tlsOptions: { rejectUnauthorized: false }
       });
     });
 
-    test('should not set rejectUnauthorized when TLS_SKIP_VERIFY is not set', async () => {
+    test('should set rejectUnauthorized to true for ldaps:// URLs when TLS_SKIP_VERIFY is not set', async () => {
       await script.invoke(defaultParams, mockContext);
 
       expect(Client).toHaveBeenCalledWith({
         url: 'ldaps://ad.corp.example.com:636',
-        tlsOptions: {}
+        timeout: 10000,
+        connectTimeout: 10000,
+        tlsOptions: { rejectUnauthorized: true }
+      });
+    });
+
+    test('should not include tlsOptions for ldap:// URLs when TLS_SKIP_VERIFY is not set', async () => {
+      getBaseURL.mockReturnValue('ldap://ad.corp.example.com:389');
+
+      await script.invoke(defaultParams, mockContext);
+
+      expect(Client).toHaveBeenCalledWith({
+        url: 'ldap://ad.corp.example.com:389',
+        timeout: 10000,
+        connectTimeout: 10000
       });
     });
 
@@ -257,6 +282,41 @@ describe('AD Disable User Script', () => {
       await script.invoke(defaultParams, mockContext);
 
       expect(getBaseURL).toHaveBeenCalledWith(defaultParams, mockContext);
+    });
+
+    test('should throw when userDN is missing', async () => {
+      const params = {};
+
+      await expect(script.invoke(params, mockContext)).rejects.toThrow('userDN is required');
+      expect(mockBind).not.toHaveBeenCalled();
+    });
+
+    test('should handle unbind errors gracefully', async () => {
+      mockUnbind.mockRejectedValueOnce(new Error('Unbind failed'));
+
+      const result = await script.invoke(defaultParams, mockContext);
+
+      expect(result.status).toBe('success');
+      expect(result.disabled).toBe(true);
+    });
+
+    test('should not mask original error when unbind also fails', async () => {
+      mockSearch.mockRejectedValueOnce(new Error('Search operation failed'));
+      mockUnbind.mockRejectedValueOnce(new Error('Unbind failed'));
+
+      await expect(script.invoke(defaultParams, mockContext)).rejects.toThrow('Search operation failed');
+    });
+
+    test('should return dry_run_completed when dry_run is true', async () => {
+      const params = { ...defaultParams, dry_run: true };
+
+      const result = await script.invoke(params, mockContext);
+
+      expect(result.status).toBe('dry_run_completed');
+      expect(result.userDN).toBe(defaultParams.userDN);
+      expect(result.disabled).toBe(false);
+      expect(mockBind).not.toHaveBeenCalled();
+      expect(mockSearch).not.toHaveBeenCalled();
     });
   });
 

@@ -1,20 +1,37 @@
 /**
  * Active Directory Disable User Action
  *
- * Disables an enabled user account in on-premise Active Directory by setting
+ * Disables a user account in on-premise Active Directory by setting
  * the ACCOUNTDISABLE bit (0x0002) in the userAccountControl attribute.
+ * If the user is already disabled, returns success with disabled=false.
  */
 
-import { Client } from 'ldapts';
+import { Client, Change, Attribute } from 'ldapts';
 import { getBaseURL } from '@sgnl-actions/utils';
 
 /**
- * Helper function to disable a user account in Active Directory
+ * Safely disconnect from LDAP server.
+ * Errors during unbind are logged but not thrown to avoid masking original errors.
+ *
+ * @param {Client} client - The ldapts client
+ */
+async function safeUnbind(client) {
+  try {
+    await client.unbind();
+  } catch (unbindError) {
+    console.warn(`Warning: Error during LDAP unbind: ${unbindError.message}`);
+  }
+}
+
+/**
+ * Disable a user account in Active Directory by setting the ACCOUNTDISABLE bit.
+ *
  * @param {string} userDN - Distinguished Name of the user
  * @param {Client} client - Bound ldapts Client instance
  * @returns {Promise<{disabled: boolean, previousUAC: number, newUAC: number}>}
  */
 async function disableUser(userDN, client) {
+  // Search for current userAccountControl value
   const { searchEntries } = await client.search(userDN, {
     scope: 'base',
     attributes: ['userAccountControl'],
@@ -37,16 +54,17 @@ async function disableUser(userDN, client) {
     return { disabled: false, previousUAC: uac, newUAC: uac };
   }
 
-  // Set the ACCOUNTDISABLE bit
+  // Set the ACCOUNTDISABLE bit while preserving other flags
   const newUAC = uac | 2;
 
   await client.modify(userDN, [
-    {
+    new Change({
       operation: 'replace',
-      modification: {
-        userAccountControl: [newUAC.toString()]
-      }
-    }
+      modification: new Attribute({
+        type: 'userAccountControl',
+        values: [newUAC.toString()]
+      })
+    })
   ]);
 
   return { disabled: true, previousUAC: uac, newUAC };
@@ -54,22 +72,28 @@ async function disableUser(userDN, client) {
 
 export default {
   /**
-   * Main execution handler - disables an enabled user in on-premise Active Directory
+   * Main execution handler - disables a user account in Active Directory.
+   *
    * @param {Object} params - Job input parameters
    * @param {string} params.userDN - Distinguished Name of the user to disable
    * @param {string} [params.address] - Optional LDAP server URL override
-   * @param {Object} context - Execution context with env, secrets, outputs
-   * @param {string} context.environment.ADDRESS - Default LDAP server URL
-   * @param {string} context.secrets.LDAP_BIND_DN - Bind DN for LDAP authentication
-   * @param {string} context.secrets.LDAP_BIND_PASSWORD - Bind password for LDAP authentication
-   * @param {string} [context.environment.TLS_SKIP_VERIFY] - Set to 'true' to skip TLS certificate verification
-   * @returns {Object} Job results
+   * @param {boolean} [params.dry_run] - If true, validate without making changes
+   * @param {Object} context - Execution context with environment and secrets
+   * @returns {Object} Job results including status, userDN, disabled flag, and UAC values
    */
   invoke: async (params, context) => {
     console.log('Starting Active Directory disable user operation');
 
     const { userDN, dry_run = false } = params;
 
+    // Validate required parameters
+    if (!userDN) {
+      throw new Error('userDN is required');
+    }
+
+    console.log(`Planning to disable user: ${userDN}`);
+
+    // Handle dry run - validate and return without making changes
     if (dry_run) {
       console.log('DRY RUN: No changes will be made to Active Directory');
       return {
@@ -79,39 +103,44 @@ export default {
       };
     }
 
-    // Get LDAP server URL using shared utility
+    // Get LDAP connection details
     const address = getBaseURL(params, context);
-
-    // Get bind credentials from secrets
     const bindDN = context.secrets.LDAP_BIND_DN;
     const bindPassword = context.secrets.LDAP_BIND_PASSWORD;
 
+    // Validate required secrets
     if (!bindDN || !bindPassword) {
       throw new Error('Missing LDAP bind credentials. Provide LDAP_BIND_DN and LDAP_BIND_PASSWORD in secrets.');
     }
 
-    // Build TLS options
-    const tlsOptions = {};
-    if (context.environment?.TLS_SKIP_VERIFY === 'true') {
-      tlsOptions.rejectUnauthorized = false;
+    // Configure LDAP client with timeouts
+    const clientOptions = {
+      url: address,
+      timeout: 10000,
+      connectTimeout: 10000
+    };
+
+    // Configure TLS options for secure connections
+    if (address.startsWith('ldaps://') || context.environment?.TLS_SKIP_VERIFY === 'true') {
+      clientOptions.tlsOptions = {
+        rejectUnauthorized: context.environment?.TLS_SKIP_VERIFY !== 'true'
+      };
     }
 
-    const client = new Client({
-      url: address,
-      tlsOptions
-    });
+    const client = new Client(clientOptions);
 
     try {
-      console.log(`Binding to LDAP server at ${address}`);
+      console.log(`Connecting to LDAP server at ${address}`);
       await client.bind(bindDN, bindPassword);
+      console.log('Successfully authenticated to LDAP server');
 
-      console.log(`Disabling user ${userDN}`);
+      console.log(`Disabling user: ${userDN}`);
       const { disabled, previousUAC, newUAC } = await disableUser(userDN, client);
 
       if (disabled) {
-        console.log(`Successfully disabled user ${userDN} (UAC ${previousUAC} -> ${newUAC})`);
+        console.log(`Successfully disabled user "${userDN}" (UAC: ${previousUAC} -> ${newUAC})`);
       } else {
-        console.log(`User ${userDN} is already disabled (UAC ${previousUAC})`);
+        console.log(`User "${userDN}" is already disabled (UAC: ${previousUAC})`);
       }
 
       return {
@@ -123,21 +152,25 @@ export default {
         address
       };
     } catch (error) {
-      console.error(`Error disabling user: ${error.message}`);
+      console.error(`Failed to disable user: ${error.message}`);
       throw error;
     } finally {
-      await client.unbind();
+      await safeUnbind(client);
     }
   },
 
   /**
-   * Error recovery handler - framework handles retries by default
+   * Error recovery handler - classifies errors and determines retry behavior.
+   *
    * @param {Object} params - Original params plus error information
-   * @param {Object} _context - Execution context
+   * @param {Error} params.error - The error that occurred
+   * @param {string} params.userDN - The user DN being disabled
+   * @param {Object} _context - Execution context (unused)
+   * @throws {Error} Re-throws with appropriate classification
    */
   error: async (params, _context) => {
     const { error, userDN } = params;
-    console.error(`Failed to disable AD user ${userDN}: ${error.message}`);
+    console.error(`Error handler invoked for user "${userDN}": ${error.message}`);
 
     const errorMessage = error.message.toLowerCase();
 
@@ -149,7 +182,7 @@ export default {
       throw new Error(`LDAP authentication failed: ${error.message}`);
     }
 
-    // Connection errors (retryable)
+    // Connection errors (retryable - framework will retry)
     if (errorMessage.includes('connection') ||
         errorMessage.includes('timeout') ||
         errorMessage.includes('econnrefused')) {
@@ -176,10 +209,13 @@ export default {
   },
 
   /**
-   * Graceful shutdown handler - performs cleanup
+   * Graceful shutdown handler - called when the job is halted.
+   *
    * @param {Object} params - Original params plus halt reason
-   * @param {Object} _context - Execution context
-   * @returns {Object} Cleanup results
+   * @param {string} params.reason - The reason for the halt
+   * @param {string} [params.userDN] - The user DN being disabled
+   * @param {Object} _context - Execution context (unused)
+   * @returns {Object} Cleanup results with halted status
    */
   halt: async (params, _context) => {
     const { reason, userDN } = params;
