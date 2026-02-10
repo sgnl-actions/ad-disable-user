@@ -4,12 +4,14 @@ This action disables an enabled user account in on-premise Active Directory usin
 
 ## Overview
 
-The AD Disable User action disables Active Directory accounts by setting the `ACCOUNTDISABLE` bit (0x0002) in the `userAccountControl` attribute. It reads the current UAC value, checks if the account is enabled, and if so sets the disable bit while preserving all other flags. The operation is idempotent -- if the account is already disabled, it returns success without making changes.
+The AD Disable User action disables Active Directory accounts by setting the `ACCOUNTDISABLE` bit (0x0002) in the `userAccountControl` attribute. It first looks up the user by their `sAMAccountName`, then reads the current UAC value, checks if the account is enabled, and if so sets the disable bit while preserving all other flags. The operation is idempotent -- if the account is already disabled, it returns success without making changes.
 
 ## Prerequisites
 
 - On-premise Active Directory domain controller accessible via LDAP or LDAPS
-- A service account with permissions to modify the `userAccountControl` attribute on target user objects
+- A service account with permissions to:
+  - Search for users in the specified base DN
+  - Modify the `userAccountControl` attribute on target user objects
 - Network connectivity from the execution environment to the LDAP server
 
 ## Configuration
@@ -34,7 +36,8 @@ This action uses LDAP Simple Bind authentication with a service account.
 
 | Parameter | Type | Required | Description | Example |
 |-----------|------|----------|-------------|---------|
-| `userDN` | string | Yes | Distinguished Name of the user to disable | `CN=John Doe,OU=Users,DC=corp,DC=example,DC=com` |
+| `baseDN` | string | Yes | Base DN to search for the user | `DC=corp,DC=example,DC=com` |
+| `samAccountName` | string | Yes | The user's sAMAccountName (pre-Windows 2000 logon name) | `jdoe` |
 | `address` | string | No | Optional LDAP server URL override | `ldaps://ad.corp.example.com:636` |
 
 ### Output Structure
@@ -42,7 +45,7 @@ This action uses LDAP Simple Bind authentication with a service account.
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | string | Operation result (success, failed, etc.) |
-| `userDN` | string | Distinguished Name of the user that was processed |
+| `userDN` | string | The resolved Distinguished Name of the user |
 | `disabled` | boolean | Whether the user was newly disabled (false if already disabled) |
 | `previousUAC` | number | The `userAccountControl` value before the operation |
 | `newUAC` | number | The `userAccountControl` value after the operation |
@@ -54,7 +57,8 @@ This action uses LDAP Simple Bind authentication with a service account.
 
 ```json
 {
-  "userDN": "CN=John Doe,OU=Users,DC=corp,DC=example,DC=com"
+  "baseDN": "DC=corp,DC=example,DC=com",
+  "samAccountName": "jdoe"
 }
 ```
 
@@ -70,7 +74,8 @@ This action uses LDAP Simple Bind authentication with a service account.
     "type": "nodejs"
   },
   "script_inputs": {
-    "userDN": "CN=Enabled User,OU=Users,DC=corp,DC=example,DC=com"
+    "baseDN": "DC=corp,DC=example,DC=com",
+    "samAccountName": "jdoe"
   },
   "environment": {
     "ADDRESS": "ldaps://ad.corp.example.com:636"
@@ -96,7 +101,8 @@ For environments with self-signed certificates:
     "type": "nodejs"
   },
   "script_inputs": {
-    "userDN": "CN=Enabled User,OU=Users,DC=corp,DC=example,DC=com"
+    "baseDN": "DC=corp,DC=example,DC=com",
+    "samAccountName": "jdoe"
   },
   "environment": {
     "ADDRESS": "ldaps://ad.corp.example.com:636",
@@ -111,12 +117,14 @@ For environments with self-signed certificates:
 
 ## API Details
 
-This action performs two LDAP operations:
+This action performs the following LDAP operations:
 
-1. **SEARCH** the user DN (base scope) to read the current `userAccountControl` value
-2. **MODIFY** the `userAccountControl` attribute with the `ACCOUNTDISABLE` bit set (if it was not already set)
+1. **SEARCH** the base DN to find the user by `sAMAccountName` and get their Distinguished Name
+2. **SEARCH** the user DN (base scope) to read the current `userAccountControl` value
+3. **MODIFY** the `userAccountControl` attribute with the `ACCOUNTDISABLE` bit set (if it was not already set)
 
 ```
+SEARCH baseDN (scope=sub, filter=(&(objectClass=user)(sAMAccountName=<samAccountName>)))
 SEARCH userDN (scope=base, attrs=userAccountControl)
 MODIFY userDN
   REPLACE userAccountControl: <value with bit 0x0002 set>
@@ -133,19 +141,21 @@ The connection lifecycle is stateless: each invocation binds to the LDAP server,
 
 ### Retryable Errors
 
-The framework automatically retries on transient errors such as:
-- Network connectivity issues
-- LDAP server temporarily unavailable
-- Connection timeouts
+| Error | Description |
+|-------|-------------|
+| Network timeout | Domain Controller unreachable |
+| Connection refused | LDAP service not running |
+| Server busy | DC under heavy load |
 
 ### Fatal Errors
 
-The following errors will not be retried:
-- **Invalid credentials**: Incorrect bind DN or password
-- **Insufficient access rights**: Service account lacks permission to modify `userAccountControl`
-- **No such object** (LDAP code 32): The user DN does not exist
-- **Invalid DN syntax**: Malformed Distinguished Name
-- **User not found**: Search returned no entries for the given DN
+| Error | Description |
+|-------|-------------|
+| Invalid Credentials | Bind DN or password is incorrect |
+| Insufficient Access Rights | Service account lacks permission to search or modify |
+| User not found with sAMAccountName | No user exists with the specified sAMAccountName |
+| Multiple users found | More than one user matches the sAMAccountName (should not happen in a properly configured AD) |
+| Invalid DN Syntax | Malformed Distinguished Name |
 
 ## Security Considerations
 
@@ -154,33 +164,62 @@ The following errors will not be retried:
 - **TLS Verification**: Certificate verification is enabled by default; `TLS_SKIP_VERIFY` should only be used in development or with self-signed certificates
 - **Credential Security**: Bind credentials are provided via secrets and are never logged
 - **Connection Lifecycle**: Connections are unbound in a `finally` block to prevent resource leaks
+- **LDAP Filter Escaping**: Special characters in sAMAccountName are escaped to prevent LDAP injection
 
 ## Development
 
-### Local Testing
+### Setup
 
 ```bash
-# Run with mock parameters
-npm run dev
-
-# Run unit tests
-npm test
-
-# Check test coverage
-npm run test:coverage
+npm install
 ```
 
-### Building
+### Run tests
 
 ```bash
-# Build distribution bundle
+npm test
+```
+
+### Run tests in watch mode
+
+```bash
+npm run test:watch
+```
+
+### Build
+
+```bash
 npm run build
+```
 
-# Validate metadata
+### Validate metadata
+
+```bash
 npm run validate
+```
 
-# Lint code
+### Lint
+
+```bash
 npm run lint
+npm run lint:fix
+```
+
+### Local testing
+
+Create a `../.env` file with your AD credentials:
+
+```
+AD_ADDRESS=ldap://your-dc.example.com:389
+LDAP_BIND_DN=CN=admin,DC=example,DC=com
+LDAP_BIND_PASSWORD=your-password
+TLS_SKIP_VERIFY=false
+```
+
+Then run:
+
+```bash
+npm run dev
 ```
 
 ## Troubleshooting
@@ -200,12 +239,13 @@ npm run lint
    - Check that the account is not locked or expired in Active Directory
 
 4. **"Insufficient access rights"**
+   - Verify the service account has Read permission to search for users
    - Verify the service account has Write permission on the `userAccountControl` attribute
    - Check if there are any deny ACEs blocking the operation
 
-5. **"User not found"**
-   - Verify the user DN exists in Active Directory
-   - Check for typos in the Distinguished Name
+5. **"User not found with sAMAccountName"**
+   - Verify the sAMAccountName is correct (case-insensitive in AD)
+   - Check that the user exists within the specified baseDN
 
 6. **TLS/SSL connection errors**
    - Verify the LDAP server is accessible on the configured port
@@ -220,11 +260,11 @@ To verify the action worked correctly, you can check the account status using:
 # Using ldapsearch
 ldapsearch -H ldaps://ad.corp.example.com:636 \
   -D "CN=svc-sgnl,OU=Service Accounts,DC=corp,DC=example,DC=com" \
-  -W -b "CN=John Doe,OU=Users,DC=corp,DC=example,DC=com" \
-  "(objectClass=user)" userAccountControl
+  -W -b "DC=corp,DC=example,DC=com" \
+  "(sAMAccountName=jdoe)" userAccountControl
 
 # Using PowerShell
-Get-ADUser -Identity "John Doe" -Properties Enabled, userAccountControl | Select-Object Name, Enabled, userAccountControl
+Get-ADUser -Identity "jdoe" -Properties Enabled, userAccountControl | Select-Object Name, Enabled, userAccountControl
 ```
 
 ## Support
