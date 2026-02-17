@@ -441,6 +441,28 @@ describe('AD Disable User Script', () => {
 
       await script.invoke(paramsWithSpecialChars, mockContext);
     });
+
+    test('should escape backslash in sAMAccountName for LDAP filter', async () => {
+      const paramsWithBackslash = {
+        ...defaultParams,
+        samAccountName: 'domain\\user'
+      };
+
+      mockSearch.mockImplementation((baseDN, options) => {
+        if (options.filter.includes('sAMAccountName')) {
+          expect(options.filter).toContain('domain\\5cuser');
+          return Promise.resolve({
+            searchEntries: [{ dn: resolvedUserDN }]
+          });
+        } else {
+          return Promise.resolve({
+            searchEntries: [{ dn: resolvedUserDN, userAccountControl: '512' }]
+          });
+        }
+      });
+
+      await script.invoke(paramsWithBackslash, mockContext);
+    });
   });
 
   describe('error handler', () => {
