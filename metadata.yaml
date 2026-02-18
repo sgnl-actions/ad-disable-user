@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/sgnl-actions/schemas/main/metadata.schema.json
 name: ad-disable-user
 description: Disable an enabled user account in on-premise Active Directory via LDAP
 
