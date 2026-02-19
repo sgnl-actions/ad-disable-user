@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/sgnl-actions/schemas/main/metadata.schema.json
 name: ad-disable-user
 description: Disable an enabled user account in on-premise Active Directory via LDAP
 
@@ -53,6 +54,14 @@ outputs:
   newUAC:
     type: number
     description: The userAccountControl value after the operation
+
+  baseDN:
+    type: text
+    description: The base DN used to search for the user
+
+  samAccountName:
+    type: text
+    description: The sAMAccountName used to identify the user
 
   address:
     type: text
