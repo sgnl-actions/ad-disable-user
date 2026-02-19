@@ -55,6 +55,14 @@ outputs:
     type: number
     description: The userAccountControl value after the operation
 
+  baseDN:
+    type: text
+    description: The base DN used to search for the user
+
+  samAccountName:
+    type: text
+    description: The sAMAccountName used to identify the user
+
   address:
     type: text
     description: The LDAP server URL that was used
