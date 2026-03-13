@@ -4,7 +4,15 @@ This action disables an enabled user account in on-premise Active Directory usin
 
 ## Overview
 
-The AD Disable User action disables Active Directory accounts by setting the `ACCOUNTDISABLE` bit (0x0002) in the `userAccountControl` attribute. It first looks up the user by their `sAMAccountName`, then reads the current UAC value, checks if the account is enabled, and if so sets the disable bit while preserving all other flags. The operation is idempotent -- if the account is already disabled, it returns success without making changes.
+The AD Disable User action disables Active Directory accounts by setting the `ACCOUNTDISABLE` bit (0x0002) in the `userAccountControl` attribute. It first looks up the user by their `sAMAccountName`, then reads the current UAC value, checks if the account is enabled, and if so sets the disable bit while preserving all other flags. The action supports comprehensive error handling through the enhanced SGNL testing framework.
+
+Key capabilities:
+- **User lookup by sAMAccountName**: Searches the base DN to resolve the user's Distinguished Name
+- **Idempotent operations**: Returns success without changes if the account is already disabled
+- **UAC bit preservation**: Sets only the ACCOUNTDISABLE bit (0x0002) while preserving all other flags
+- **Dry run mode**: Validate parameters without making changes to Active Directory
+- **LDAP filter escaping**: Prevents injection via special characters in sAMAccountName
+- **Comprehensive testing**: Scenario-based testing framework with full ldapts mocking and 8 test scenarios
 
 ## Prerequisites
 
@@ -176,9 +184,19 @@ npm install
 
 ### Run tests
 
+This action uses the enhanced SGNL testing framework with comprehensive LDAP mocking support. All 8 test scenarios validate user disabling, idempotency, error handling, and dry run behavior:
+
 ```bash
 npm test
 ```
+
+The test suite includes:
+- Successful disabling of an enabled user (UAC 512 -> 514)
+- Idempotent behavior when user is already disabled
+- User not found handling
+- Authentication and permission failure handling
+- Dry run validation
+- Missing required parameter validation
 
 ### Run tests in watch mode
 
@@ -207,13 +225,24 @@ npm run lint:fix
 
 ### Local testing
 
-Create a `../.env` file with your AD credentials:
+Copy the sample environment file and configure with your AD credentials:
+
+```bash
+cp .env.sample .env
+```
+
+Then edit `.env` with your actual values:
 
 ```
 AD_ADDRESS=ldap://your-dc.example.com:389
 LDAP_BIND_DN=CN=admin,DC=example,DC=com
 LDAP_BIND_PASSWORD=your-password
 TLS_SKIP_VERIFY=false
+
+# Test parameters - customize as needed
+BASE_DN=DC=corp,DC=example,DC=com
+SAM_ACCOUNT_NAME=jdoe
+DRY_RUN=false
 ```
 
 Then run:
@@ -269,6 +298,7 @@ Get-ADUser -Identity "jdoe" -Properties Enabled, userAccountControl | Select-Obj
 
 ## Support
 
-- [ldapts Documentation](https://github.com/ldapts/ldapts)
+- [ldapts Documentation](https://github.com/ldapts/ldapts) - LDAP client library used for Active Directory operations
+- [SGNL Testing Framework](https://github.com/sgnl-actions/testing) - Enhanced testing with LDAP mocking capabilities
 - [Active Directory LDAP Reference](https://docs.microsoft.com/en-us/windows/win32/ad/active-directory-domain-services)
 - [SGNL Actions Documentation](https://github.com/sgnl-actions)

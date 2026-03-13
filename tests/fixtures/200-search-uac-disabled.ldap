@@ -1,0 +1,7 @@
+# LDAP search operation - user found with disabled account (UAC 514)
+operation: search
+result: success
+code: 0
+searchEntries:
+  - dn: "CN=testuser,OU=Users,OU=adaptertest,DC=adaptertest,DC=sgnl,DC=ai"
+    userAccountControl: "514"
