@@ -4,14 +4,14 @@
  * Development runner for testing scripts locally
  *
  * Configuration is read from environment variables. Set them in:
- * - Parent directory's .env file (loaded via --env-file flag)
+ * - .env file in the repo root (loaded via --env-file flag)
  * - Shell environment variables
  * - Or override inline below
  */
 
 import script from '../src/script.mjs';
 
-// Read configuration from environment variables (set in ../.env)
+// Read configuration from environment variables (set in .env)
 const mockContext = {
   environment: {
     ADDRESS: process.env.AD_ADDRESS || 'ldap://localhost:389',
@@ -28,8 +28,8 @@ const mockContext = {
 
 // Action-specific parameters - customize these for your test
 const mockParams = {
-  baseDN: 'DC=corp,DC=example,DC=com',
-  samAccountName: 'jdoe',
+  baseDN: process.env.BASE_DN || 'DC=corp,DC=example,DC=com',
+  samAccountName: process.env.SAM_ACCOUNT_NAME || 'jdoe',
   dry_run: process.env.DRY_RUN === 'true'
 };
 
@@ -39,19 +39,14 @@ async function runDev() {
   // Validate required environment variables
   if (!mockContext.secrets.LDAP_BIND_DN || !mockContext.secrets.LDAP_BIND_PASSWORD) {
     console.error('ERROR: Missing required environment variables.');
-    console.error('Set LDAP_BIND_DN and LDAP_BIND_PASSWORD in ../.env or environment.');
+    console.error('Set LDAP_BIND_DN and LDAP_BIND_PASSWORD in .env or environment.');
     console.error('\nExample:');
     console.error('  export LDAP_BIND_DN="CN=admin,DC=example,DC=com"');
     console.error('  export LDAP_BIND_PASSWORD="password"');
     process.exit(1);
   }
 
-  console.log('Parameters:', JSON.stringify(mockParams, null, 2));
-  console.log('Context:', JSON.stringify({
-    ...mockContext,
-    secrets: { LDAP_BIND_DN: mockContext.secrets.LDAP_BIND_DN, LDAP_BIND_PASSWORD: '***' }
-  }, null, 2));
-  console.log('\n' + '='.repeat(50) + '\n');
+  console.log('='.repeat(50) + '\n');
 
   try {
     const result = await script.invoke(mockParams, mockContext);

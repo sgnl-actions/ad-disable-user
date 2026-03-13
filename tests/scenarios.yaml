@@ -1,0 +1,175 @@
+action:
+  params:
+    baseDN: "OU=Users,OU=adaptertest,DC=adaptertest,DC=sgnl,DC=ai"
+    samAccountName: testuser
+  context:
+    secrets:
+      LDAP_BIND_DN: "CN=svc-sgnl,OU=Service Accounts,DC=adaptertest,DC=sgnl,DC=ai"
+      LDAP_BIND_PASSWORD: test-password
+    environment:
+      ADDRESS: "ldap://ad.corp.example.com:389"
+
+scenarios:
+  - name: successfully disables an enabled user
+    steps:
+      - ldap:
+          operation: bind
+          bindDN: "CN=svc-sgnl,OU=Service Accounts,DC=adaptertest,DC=sgnl,DC=ai"
+          password: "[MASKED]"
+        fixture: fixtures/200-bind-success.ldap
+      - ldap:
+          operation: search
+          baseDN: "OU=Users,OU=adaptertest,DC=adaptertest,DC=sgnl,DC=ai"
+          scope: sub
+          filter: "(&(objectClass=user)(sAMAccountName=testuser))"
+          attributes: ["distinguishedName"]
+        fixture: fixtures/200-search-user-found.ldap
+      - ldap:
+          operation: search
+          dn: "CN=testuser,OU=Users,OU=adaptertest,DC=adaptertest,DC=sgnl,DC=ai"
+          scope: base
+          attributes: ["userAccountControl"]
+        fixture: fixtures/200-search-uac-enabled.ldap
+      - ldap:
+          operation: modify
+          dn: "CN=testuser,OU=Users,OU=adaptertest,DC=adaptertest,DC=sgnl,DC=ai"
+          changes:
+            - operation: replace
+              modification:
+                type: userAccountControl
+                values: ["514"]
+        fixture: fixtures/200-modify-success.ldap
+      - ldap:
+          operation: unbind
+        fixture: fixtures/200-unbind-success.ldap
+    invoke:
+      returns:
+        status: success
+        userDN: "CN=testuser,OU=Users,OU=adaptertest,DC=adaptertest,DC=sgnl,DC=ai"
+        disabled: true
+        previousUAC: 512
+        newUAC: 514
+        address: "ldap://ad.corp.example.com:389"
+
+  - name: user already disabled (idempotent)
+    steps:
+      - ldap:
+          operation: bind
+          bindDN: "CN=svc-sgnl,OU=Service Accounts,DC=adaptertest,DC=sgnl,DC=ai"
+          password: "[MASKED]"
+        fixture: fixtures/200-bind-success.ldap
+      - ldap:
+          operation: search
+          baseDN: "OU=Users,OU=adaptertest,DC=adaptertest,DC=sgnl,DC=ai"
+          scope: sub
+          filter: "(&(objectClass=user)(sAMAccountName=testuser))"
+          attributes: ["distinguishedName"]
+        fixture: fixtures/200-search-user-found.ldap
+      - ldap:
+          operation: search
+          dn: "CN=testuser,OU=Users,OU=adaptertest,DC=adaptertest,DC=sgnl,DC=ai"
+          scope: base
+          attributes: ["userAccountControl"]
+        fixture: fixtures/200-search-uac-disabled.ldap
+      - ldap:
+          operation: unbind
+        fixture: fixtures/200-unbind-success.ldap
+    invoke:
+      returns:
+        status: success
+        userDN: "CN=testuser,OU=Users,OU=adaptertest,DC=adaptertest,DC=sgnl,DC=ai"
+        disabled: false
+        previousUAC: 514
+        newUAC: 514
+        address: "ldap://ad.corp.example.com:389"
+
+  - name: user not found
+    params:
+      samAccountName: nonexistent
+    steps:
+      - ldap:
+          operation: bind
+          bindDN: "CN=svc-sgnl,OU=Service Accounts,DC=adaptertest,DC=sgnl,DC=ai"
+          password: "[MASKED]"
+        fixture: fixtures/200-bind-success.ldap
+      - ldap:
+          operation: search
+          baseDN: "OU=Users,OU=adaptertest,DC=adaptertest,DC=sgnl,DC=ai"
+          scope: sub
+          filter: "(&(objectClass=user)(sAMAccountName=nonexistent))"
+          attributes: ["distinguishedName"]
+        fixture: fixtures/200-search-user-not-found.ldap
+      - ldap:
+          operation: unbind
+        fixture: fixtures/200-unbind-success.ldap
+    invoke:
+      throws: "User not found with sAMAccountName: nonexistent"
+
+  - name: authentication failed
+    steps:
+      - ldap:
+          operation: bind
+          bindDN: "CN=svc-sgnl,OU=Service Accounts,DC=adaptertest,DC=sgnl,DC=ai"
+          password: "[MASKED]"
+        fixture: fixtures/49-invalid-credentials.ldap
+      - ldap:
+          operation: unbind
+        fixture: fixtures/200-unbind-success.ldap
+    invoke:
+      throws: "INVALID_CREDENTIALS"
+
+  - name: insufficient permissions on modify
+    steps:
+      - ldap:
+          operation: bind
+          bindDN: "CN=svc-sgnl,OU=Service Accounts,DC=adaptertest,DC=sgnl,DC=ai"
+          password: "[MASKED]"
+        fixture: fixtures/200-bind-success.ldap
+      - ldap:
+          operation: search
+          baseDN: "OU=Users,OU=adaptertest,DC=adaptertest,DC=sgnl,DC=ai"
+          scope: sub
+          filter: "(&(objectClass=user)(sAMAccountName=testuser))"
+          attributes: ["distinguishedName"]
+        fixture: fixtures/200-search-user-found.ldap
+      - ldap:
+          operation: search
+          dn: "CN=testuser,OU=Users,OU=adaptertest,DC=adaptertest,DC=sgnl,DC=ai"
+          scope: base
+          attributes: ["userAccountControl"]
+        fixture: fixtures/200-search-uac-enabled.ldap
+      - ldap:
+          operation: modify
+          dn: "CN=testuser,OU=Users,OU=adaptertest,DC=adaptertest,DC=sgnl,DC=ai"
+        fixture: fixtures/50-insufficient-access.ldap
+      - ldap:
+          operation: unbind
+        fixture: fixtures/200-unbind-success.ldap
+    invoke:
+      throws: "INSUFFICIENT_ACCESS_RIGHTS"
+
+  - name: dry run mode
+    params:
+      dry_run: true
+    steps: []
+    invoke:
+      returns:
+        status: dry_run_completed
+        baseDN: "OU=Users,OU=adaptertest,DC=adaptertest,DC=sgnl,DC=ai"
+        samAccountName: testuser
+        userDN: null
+        disabled: false
+
+  - name: missing baseDN
+    params:
+      baseDN: ""
+    steps: []
+    invoke:
+      throws: "baseDN is required"
+
+  - name: missing samAccountName
+    params:
+      samAccountName: ""
+    steps: []
+    invoke:
+      throws: "samAccountName is required"
