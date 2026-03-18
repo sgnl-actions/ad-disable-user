@@ -14,7 +14,7 @@ import script from '../src/script.mjs';
 // Read configuration from environment variables (set in .env)
 const mockContext = {
   environment: {
-    ADDRESS: process.env.AD_ADDRESS || 'ldap://localhost:389',
+    ADDRESS: process.env.ADDRESS || 'ldap://localhost:389',
     TLS_SKIP_VERIFY: process.env.TLS_SKIP_VERIFY || 'false'
   },
   secrets: {
