@@ -4,8 +4,8 @@ action:
     samAccountName: testuser
   context:
     secrets:
-      LDAP_BIND_DN: "CN=svc-sgnl,OU=Service Accounts,DC=adaptertest,DC=sgnl,DC=ai"
-      LDAP_BIND_PASSWORD: test-password
+      BASIC_USERNAME: "CN=svc-sgnl,OU=Service Accounts,DC=adaptertest,DC=sgnl,DC=ai"
+      BASIC_PASSWORD: test-password
     environment:
       ADDRESS: "ldap://ad.corp.example.com:389"
 
