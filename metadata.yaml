@@ -66,3 +66,23 @@ outputs:
   address:
     type: text
     description: The LDAP server URL that was used
+
+environment:
+  ADDRESS:
+    type: text
+    description: LDAP server URL
+    required: false
+  TLS_SKIP_VERIFY:
+    type: text
+    description: Skip TLS certificate verification (set to 'true' to disable)
+    required: false
+
+secrets:
+  BASIC_USERNAME:
+    type: text
+    description: LDAP bind username (Distinguished Name)
+    required: true
+  BASIC_PASSWORD:
+    type: text
+    description: LDAP bind password
+    required: true
