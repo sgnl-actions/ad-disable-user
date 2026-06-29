@@ -26,7 +26,7 @@ inputs:
     required: false
     validation:
       min: 1
-      max: 200
+      max: 500
 
   dry_run:
     type: boolean
